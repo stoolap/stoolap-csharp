@@ -55,12 +55,10 @@ internal static class LibraryResolver
         var fileName = GetPlatformFileName();
         var baseDir = AppContext.BaseDirectory;
 
-        var nextToAssembly = Path.Combine(baseDir, fileName);
-        if (File.Exists(nextToAssembly) && NativeLibrary.TryLoad(nextToAssembly, out var localHandle))
-        {
-            return localHandle;
-        }
-
+        // Probe the RID-specific subfolder FIRST. This is the canonical NuGet
+        // layout and avoids a case-insensitive filename collision on Windows,
+        // where the native "stoolap.dll" and the managed "Stoolap.dll" would
+        // otherwise live in the same directory and only differ by case.
         var rid = GetRuntimeIdentifier();
         if (rid is not null)
         {
@@ -68,6 +66,21 @@ internal static class LibraryResolver
             if (File.Exists(ridPath) && NativeLibrary.TryLoad(ridPath, out var ridHandle))
             {
                 return ridHandle;
+            }
+        }
+
+        // Fall back to a file sitting next to the managed assembly.
+        // Skipped on Windows: the case-insensitive filesystem makes
+        // "stoolap.dll" indistinguishable from this assembly's
+        // "Stoolap.dll". Windows users who want to load a native binary
+        // from a custom location should set STOOLAP_LIB_PATH instead.
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            var nextToAssembly = Path.Combine(baseDir, fileName);
+            if (File.Exists(nextToAssembly) &&
+                NativeLibrary.TryLoad(nextToAssembly, out var localHandle))
+            {
+                return localHandle;
             }
         }
 

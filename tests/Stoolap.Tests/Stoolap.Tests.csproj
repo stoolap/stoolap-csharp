@@ -17,21 +17,37 @@
     <ProjectReference Include="..\..\src\Stoolap\Stoolap.csproj" />
   </ItemGroup>
 
+  <!--
+    Copy the host platform's native library into a runtimes/<rid>/native
+    subfolder of the test output, NOT the root. On Windows this avoids a
+    case-insensitive collision between the managed Stoolap.dll and the
+    native stoolap.dll. Stoolap.Native.LibraryResolver probes this exact
+    path at runtime.
+  -->
   <ItemGroup>
     <None Include="..\..\runtimes\osx-arm64\native\libstoolap.dylib"
           Condition="Exists('..\..\runtimes\osx-arm64\native\libstoolap.dylib') and $([MSBuild]::IsOSPlatform('OSX'))"
+          Link="runtimes\osx-arm64\native\libstoolap.dylib"
           CopyToOutputDirectory="PreserveNewest"
           Visible="false" />
     <None Include="..\..\runtimes\osx-x64\native\libstoolap.dylib"
           Condition="Exists('..\..\runtimes\osx-x64\native\libstoolap.dylib') and $([MSBuild]::IsOSPlatform('OSX'))"
+          Link="runtimes\osx-x64\native\libstoolap.dylib"
           CopyToOutputDirectory="PreserveNewest"
           Visible="false" />
     <None Include="..\..\runtimes\linux-x64\native\libstoolap.so"
           Condition="Exists('..\..\runtimes\linux-x64\native\libstoolap.so') and $([MSBuild]::IsOSPlatform('Linux'))"
+          Link="runtimes\linux-x64\native\libstoolap.so"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+    <None Include="..\..\runtimes\linux-arm64\native\libstoolap.so"
+          Condition="Exists('..\..\runtimes\linux-arm64\native\libstoolap.so') and $([MSBuild]::IsOSPlatform('Linux'))"
+          Link="runtimes\linux-arm64\native\libstoolap.so"
           CopyToOutputDirectory="PreserveNewest"
           Visible="false" />
     <None Include="..\..\runtimes\win-x64\native\stoolap.dll"
           Condition="Exists('..\..\runtimes\win-x64\native\stoolap.dll') and $([MSBuild]::IsOSPlatform('Windows'))"
+          Link="runtimes\win-x64\native\stoolap.dll"
           CopyToOutputDirectory="PreserveNewest"
           Visible="false" />
   </ItemGroup>
