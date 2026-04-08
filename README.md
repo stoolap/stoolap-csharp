@@ -59,7 +59,7 @@ stoolap-csharp/
 │   │   ├── StoolapConnectionStringBuilder.cs
 │   │   └── NamedParameterRewriter.cs
 │   └── build/Stoolap.targets             # native-binary copy MSBuild targets
-├── tests/Stoolap.Tests/                  # 132 xUnit tests
+├── tests/Stoolap.Tests/                  # xUnit suite (net8.0 + net9.0)
 │   ├── SmokeTests.cs
 │   ├── ParameterBinderTests.cs
 │   ├── NamedParameterRewriterTests.cs
@@ -84,18 +84,20 @@ stoolap-csharp/
 
 ## Requirements
 
-- [.NET 8 SDK](https://dotnet.microsoft.com/download) or newer (tested on 8.0.419 and 9.0.312)
-- A `libstoolap` binary for your platform. Either:
-  1. Run `./build/build-native.sh` (requires a stoolap source checkout at `../stoolap` or the `STOOLAP_ROOT` env var),
-  2. Set `STOOLAP_LIB_PATH` to an existing `libstoolap.{dylib,so,dll}`, or
-  3. Drop a binary into `runtimes/<rid>/native/`.
+- [.NET 8 SDK](https://dotnet.microsoft.com/download) or newer (tested on 8.0.419 and 9.0.312). The `global.json` pins the host SDK to 9.0 with `latestFeature` rollforward so the multi-target `net8.0;net9.0` build works from a single install.
+- A `libstoolap` binary for your platform. Three options:
+  1. Run `./build/build-native.sh`. The script auto-clones the stoolap engine at the pinned ref if neither `$STOOLAP_ROOT` nor a sibling `../stoolap/` checkout is available.
+  2. Set `STOOLAP_LIB_PATH` to an existing `libstoolap.{dylib,so,dll}`.
+  3. Drop a pre-built binary into `runtimes/<rid>/native/` yourself.
 
 Supported RIDs: `osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`, `win-x64`.
 
 ## Build & Test
 
 ```bash
-# 1) Build the native binary for the host platform
+# 1) Build the native binary for the host platform.
+#    Auto-clones stoolap at $STOOLAP_ENGINE_REF (default v0.4.0)
+#    if no source is found locally.
 ./build/build-native.sh
 
 # 2) Build and test the managed assembly
@@ -108,10 +110,18 @@ dotnet run --project benchmark/Stoolap.Benchmark.csproj -c Release
 
 Expected: all tests pass.
 
-Override the stoolap source location:
+The script's stoolap-source resolution order:
+
+1. `$STOOLAP_ROOT` if it points at a Cargo project.
+2. `../stoolap` (sibling checkout next to this repo).
+3. Auto-clone into `build/.stoolap-engine/` (gitignored, reused on subsequent runs).
 
 ```bash
+# Explicit stoolap source location
 STOOLAP_ROOT=/absolute/path/to/stoolap ./build/build-native.sh
+
+# Different engine version (also picked up by the CI workflows)
+STOOLAP_ENGINE_REF=v0.4.1 ./build/build-native.sh
 ```
 
 ## High-level API Quick Start
@@ -324,20 +334,21 @@ Aggregate results (`SUM`, `AVG` over integer columns) may be returned as `long` 
 
 ## Testing
 
-132 xUnit tests across 10 files:
+xUnit suite across 11 files. Every test runs against both `net8.0` and `net9.0` target frameworks.
 
-| File | Tests | Covers |
-|---|---:|---|
-| `SmokeTests.cs` | 11 | open/close, execute, query, streaming, prepared, transactions, clone |
-| `ParameterBinderTests.cs` | 16 | scratch-buffer fast path, HGlobal slow path, boundaries, all primitives |
-| `NamedParameterRewriterTests.cs` | 18 | `@/:/$` sigils, literals, identifiers, comments, duplicates |
-| `ConnectionStringBuilderTests.cs` | 8 | `DataSource` round-trip, alias normalization, indexer |
-| `CommandAndParameterTests.cs` | 18 | command lifecycle, parameter collection, scalar/non-query, errors |
-| `DataReaderTests.cs` | 13 | `FieldCount`, getters, `GetValues`, `IsDBNull`, `NextResult`, indexers |
-| `SqlFeatureTests.cs` | 17 | aggregates, `GROUP BY`, `HAVING`, `ORDER BY`, joins, CTEs, subqueries |
-| `ErrorHandlingTests.cs` | 14 | invalid SQL, disposed objects, transaction lifecycle, null args |
-| `TypeRoundTripTests.cs` | 16 | every Stoolap type through binary and streaming paths |
-| `AdoTests.cs` | 3 | ADO.NET connection, reader, transaction rollback |
+| File | Covers |
+|---|---|
+| `SmokeTests.cs` | open/close, execute, query, streaming, prepared, transactions, clone |
+| `ParameterBinderTests.cs` | scratch-buffer fast path, HGlobal slow path, boundaries, all primitives |
+| `NamedParameterRewriterTests.cs` | `@/:/$` sigils, literals, identifiers, comments, duplicates |
+| `ConnectionStringBuilderTests.cs` | `DataSource` round-trip, alias normalization, indexer |
+| `CommandAndParameterTests.cs` | command lifecycle, parameter collection, scalar/non-query, errors |
+| `DataReaderTests.cs` | `FieldCount`, getters, `GetValues`, `IsDBNull`, `NextResult`, indexers |
+| `SqlFeatureTests.cs` | aggregates, `GROUP BY`, `HAVING`, `ORDER BY`, joins, CTEs, subqueries |
+| `ErrorHandlingTests.cs` | invalid SQL, disposed objects, transaction lifecycle, null args |
+| `TypeRoundTripTests.cs` | every Stoolap type through binary and streaming paths |
+| `AdoTests.cs` | ADO.NET connection lifecycle, reader streaming, transaction rollback |
+| `RegressionTests.cs` | `HasRows` accuracy, `GetFieldType` schema stability before `Read()`, transaction-foreign-connection rejection, transactional `ExecuteReader` streaming |
 
 ```bash
 dotnet test -c Release
