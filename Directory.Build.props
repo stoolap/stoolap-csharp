@@ -5,6 +5,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!--
+      Deterministic build on CI: normalizes embedded source paths so the
+      assembly hash is stable and nuget.info marks the package as
+      deterministic. GitHub Actions sets CI=true automatically.
+    -->
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <Authors>Stoolap Contributors</Authors>
     <Copyright>Copyright (c) 2026 Stoolap Contributors</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
