@@ -1,0 +1,232 @@
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  STOOLAP_ENGINE_REF: v0.4.0
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        settings:
+          - host: macos-latest
+            target: aarch64-apple-darwin
+            rid: osx-arm64
+            lib: libstoolap.dylib
+          - host: macos-latest
+            target: x86_64-apple-darwin
+            rid: osx-x64
+            lib: libstoolap.dylib
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            rid: linux-x64
+            lib: libstoolap.so
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            rid: linux-arm64
+            lib: libstoolap.so
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            rid: win-x64
+            lib: stoolap.dll
+
+    name: Build native - ${{ matrix.settings.target }}
+    runs-on: ${{ matrix.settings.host }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone stoolap engine
+        run: git clone --depth 1 --branch ${{ env.STOOLAP_ENGINE_REF }} https://github.com/stoolap/stoolap.git stoolap-engine
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Install cross-compilation tools (aarch64-linux)
+        if: matrix.settings.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: stoolap-engine
+          key: ${{ matrix.settings.target }}
+
+      - name: Build libstoolap
+        working-directory: stoolap-engine
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --features ffi --target ${{ matrix.settings.target }}
+
+      - name: Strip shared library (macOS)
+        if: runner.os == 'macOS'
+        run: strip -x stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.lib }}
+
+      - name: Strip shared library (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if [[ "${{ matrix.settings.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            aarch64-linux-gnu-strip stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.lib }}
+          else
+            strip stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.lib }}
+          fi
+
+      - name: Upload native library
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.settings.rid }}
+          path: stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.lib }}
+          if-no-files-found: error
+
+  test:
+    name: Test - .NET ${{ matrix.dotnet }} (${{ matrix.settings.os }})
+    needs: build
+    strategy:
+      fail-fast: true
+      matrix:
+        settings:
+          - os: macos-latest
+            rid: osx-arm64
+            lib: libstoolap.dylib
+          - os: ubuntu-latest
+            rid: linux-x64
+            lib: libstoolap.so
+          - os: windows-latest
+            rid: win-x64
+            lib: stoolap.dll
+        dotnet: ['8.0.x', '9.0.x']
+    runs-on: ${{ matrix.settings.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet }}
+
+      - name: Download native library
+        uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.settings.rid }}
+          path: runtimes/${{ matrix.settings.rid }}/native
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Test
+        run: dotnet test -c Release --no-build --verbosity normal
+
+  publish:
+    name: Publish to NuGet
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    environment: nuget
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all native libraries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble runtime layout
+        shell: bash
+        run: |
+          declare -A LIBS=(
+            ["osx-arm64"]="libstoolap.dylib"
+            ["osx-x64"]="libstoolap.dylib"
+            ["linux-x64"]="libstoolap.so"
+            ["linux-arm64"]="libstoolap.so"
+            ["win-x64"]="stoolap.dll"
+          )
+          for rid in "${!LIBS[@]}"; do
+            dest="runtimes/${rid}/native"
+            mkdir -p "$dest"
+            cp "artifacts/native-${rid}/${LIBS[$rid]}" "$dest/${LIBS[$rid]}"
+          done
+          echo "Assembled runtime layout:"
+          find runtimes -type f
+
+      - name: Update package version
+        run: |
+          sed -i "s|<Version>.*</Version>|<Version>${{ steps.version.outputs.VERSION }}</Version>|" src/Stoolap/Stoolap.csproj
+          grep -n "<Version>" src/Stoolap/Stoolap.csproj
+
+      - name: Restore
+        run: dotnet restore src/Stoolap/Stoolap.csproj
+
+      - name: Build
+        run: dotnet build src/Stoolap/Stoolap.csproj -c Release --no-restore
+
+      - name: Pack NuGet package
+        run: |
+          dotnet pack src/Stoolap/Stoolap.csproj \
+            -c Release \
+            --no-build \
+            -o packages \
+            /p:Version=${{ steps.version.outputs.VERSION }}
+          ls -la packages/
+
+      - name: Push to NuGet
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "packages/*.nupkg" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release
+          cp packages/*.nupkg release/
+          cp packages/*.snupkg release/ || true
+          declare -A NAMES=(
+            ["osx-arm64"]="libstoolap-osx-arm64.dylib"
+            ["osx-x64"]="libstoolap-osx-x64.dylib"
+            ["linux-x64"]="libstoolap-linux-x64.so"
+            ["linux-arm64"]="libstoolap-linux-arm64.so"
+            ["win-x64"]="stoolap-win-x64.dll"
+          )
+          for rid in "${!NAMES[@]}"; do
+            src=$(ls artifacts/native-${rid}/*)
+            cp "$src" "release/${NAMES[$rid]}"
+          done
+          ls -la release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          generate_release_notes: true
+          files: release/*

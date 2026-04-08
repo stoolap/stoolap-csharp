@@ -1,0 +1,64 @@
+# ============================================
+# .NET build outputs
+# ============================================
+bin/
+obj/
+out/
+publish/
+packages/
+TestResults/
+*.user
+*.suo
+*.userprefs
+*.sln.docstates
+*.vs/
+.vs/
+
+# Build artifacts
+*.pdb
+*.dll.config
+*.exe.config
+*.nupkg
+*.snupkg
+*.symbols.nupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# ============================================
+# IDE state
+# ============================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ============================================
+# Rider / ReSharper
+# ============================================
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# ============================================
+# Native binaries
+# ============================================
+# Built by build/build-native.sh or the GitHub Actions publish workflow.
+# Keep the runtimes/ directory tree out of git — CI places them there.
+runtimes/**/native/*.dylib
+runtimes/**/native/*.so
+runtimes/**/native/*.dll
+
+# Convenience: the stoolap-engine clone that CI uses (and developers may mirror locally)
+stoolap-engine/
+build/.stoolap-engine/
+
+# ============================================
+# Coverage and logs
+# ============================================
+coverage/
+*.coverage
+*.coveragexml
+*.log

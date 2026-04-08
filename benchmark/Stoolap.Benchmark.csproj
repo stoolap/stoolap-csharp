@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Stoolap.Benchmark</RootNamespace>
+    <AssemblyName>Stoolap.Benchmark</AssemblyName>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredCompilation>true</TieredCompilation>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\src\Stoolap\Stoolap.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\runtimes\osx-arm64\native\libstoolap.dylib"
+          Condition="Exists('..\runtimes\osx-arm64\native\libstoolap.dylib') and $([MSBuild]::IsOSPlatform('OSX'))"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+    <None Include="..\runtimes\osx-x64\native\libstoolap.dylib"
+          Condition="Exists('..\runtimes\osx-x64\native\libstoolap.dylib') and $([MSBuild]::IsOSPlatform('OSX'))"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+    <None Include="..\runtimes\linux-x64\native\libstoolap.so"
+          Condition="Exists('..\runtimes\linux-x64\native\libstoolap.so') and $([MSBuild]::IsOSPlatform('Linux'))"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+    <None Include="..\runtimes\win-x64\native\stoolap.dll"
+          Condition="Exists('..\runtimes\win-x64\native\stoolap.dll') and $([MSBuild]::IsOSPlatform('Windows'))"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+  </ItemGroup>
+
+</Project>

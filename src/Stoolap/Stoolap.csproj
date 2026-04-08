@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+    <RootNamespace>Stoolap</RootNamespace>
+    <AssemblyName>Stoolap</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <PackageId>Stoolap</PackageId>
+    <Version>0.4.0</Version>
+    <Description>Embedded SQL database driver for .NET. P/Invoke binding to libstoolap with ADO.NET integration.</Description>
+    <PackageTags>database;sql;embedded;mvcc;acid;stoolap;ado.net</PackageTags>
+    <IncludeBuildOutput>true</IncludeBuildOutput>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <IncludeSymbols>true</IncludeSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Stoolap.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\runtimes\osx-arm64\native\libstoolap.dylib"
+          Pack="true"
+          PackagePath="runtimes/osx-arm64/native/libstoolap.dylib"
+          Condition="Exists('..\..\runtimes\osx-arm64\native\libstoolap.dylib')" />
+    <None Include="..\..\runtimes\osx-x64\native\libstoolap.dylib"
+          Pack="true"
+          PackagePath="runtimes/osx-x64/native/libstoolap.dylib"
+          Condition="Exists('..\..\runtimes\osx-x64\native\libstoolap.dylib')" />
+    <None Include="..\..\runtimes\linux-x64\native\libstoolap.so"
+          Pack="true"
+          PackagePath="runtimes/linux-x64/native/libstoolap.so"
+          Condition="Exists('..\..\runtimes\linux-x64\native\libstoolap.so')" />
+    <None Include="..\..\runtimes\linux-arm64\native\libstoolap.so"
+          Pack="true"
+          PackagePath="runtimes/linux-arm64/native/libstoolap.so"
+          Condition="Exists('..\..\runtimes\linux-arm64\native\libstoolap.so')" />
+    <None Include="..\..\runtimes\win-x64\native\stoolap.dll"
+          Pack="true"
+          PackagePath="runtimes/win-x64/native/stoolap.dll"
+          Condition="Exists('..\..\runtimes\win-x64\native\stoolap.dll')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="build\Stoolap.targets" Pack="true" PackagePath="build\Stoolap.targets" />
+  </ItemGroup>
+
+</Project>

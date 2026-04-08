@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  STOOLAP_ENGINE_REF: v0.4.0
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-latest
+            target: aarch64-apple-darwin
+            rid: osx-arm64
+            lib: libstoolap.dylib
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            rid: linux-x64
+            lib: libstoolap.so
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            rid: win-x64
+            lib: stoolap.dll
+
+    name: Build native - ${{ matrix.settings.target }}
+    runs-on: ${{ matrix.settings.host }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone stoolap engine
+        run: git clone --depth 1 --branch ${{ env.STOOLAP_ENGINE_REF }} https://github.com/stoolap/stoolap.git stoolap-engine
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: stoolap-engine
+          key: ${{ matrix.settings.target }}
+
+      - name: Build libstoolap
+        working-directory: stoolap-engine
+        run: cargo build --release --features ffi --target ${{ matrix.settings.target }}
+
+      - name: Strip shared library (macOS)
+        if: runner.os == 'macOS'
+        run: strip -x stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.lib }}
+
+      - name: Strip shared library (Linux)
+        if: runner.os == 'Linux'
+        run: strip stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.lib }}
+
+      - name: Upload native library
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.settings.rid }}
+          path: stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.lib }}
+          if-no-files-found: error
+
+  test:
+    name: Test - .NET ${{ matrix.dotnet }} (${{ matrix.settings.os }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - os: macos-latest
+            rid: osx-arm64
+            lib: libstoolap.dylib
+          - os: ubuntu-latest
+            rid: linux-x64
+            lib: libstoolap.so
+          - os: windows-latest
+            rid: win-x64
+            lib: stoolap.dll
+        dotnet: ['8.0.x', '9.0.x']
+    runs-on: ${{ matrix.settings.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet }}
+
+      - name: Download native library
+        uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.settings.rid }}
+          path: runtimes/${{ matrix.settings.rid }}/native
+
+      - name: Verify native library present
+        shell: bash
+        run: |
+          ls -la runtimes/${{ matrix.settings.rid }}/native/
+          test -f runtimes/${{ matrix.settings.rid }}/native/${{ matrix.settings.lib }}
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Test
+        run: dotnet test -c Release --no-build --verbosity normal
+
+  format:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Verify formatting
+        run: dotnet format --verify-no-changes --no-restore

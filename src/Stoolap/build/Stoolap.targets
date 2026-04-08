@@ -1,0 +1,29 @@
+<Project>
+  <!--
+    Stoolap NuGet build targets.
+
+    .NET 8+ automatically copies binaries from runtimes/<rid>/native into the
+    output directory when a RuntimeIdentifier is set (e.g. `dotnet build -r osx-arm64`).
+    This file handles the plain `dotnet build` case where no RID is specified:
+    we pick the SDK's host RID via $(NETCoreSdkRuntimeIdentifier) and copy only
+    that one binary, so consumers on osx-x64 don't end up with the osx-arm64 dylib
+    and Linux x64/arm64 binaries don't collide on the same filename.
+  -->
+  <PropertyGroup>
+    <_StoolapPkgRoot>$(MSBuildThisFileDirectory)..\</_StoolapPkgRoot>
+    <_StoolapHostRid Condition="'$(_StoolapHostRid)' == '' and '$(NETCoreSdkRuntimeIdentifier)' != ''">$(NETCoreSdkRuntimeIdentifier)</_StoolapHostRid>
+  </PropertyGroup>
+
+  <Target Name="StoolapCopyNative"
+          AfterTargets="Build"
+          Condition="'$(RuntimeIdentifier)' == '' and '$(_StoolapHostRid)' != ''">
+    <ItemGroup>
+      <_StoolapHostNative Include="$(_StoolapPkgRoot)runtimes\$(_StoolapHostRid)\native\*.dylib" />
+      <_StoolapHostNative Include="$(_StoolapPkgRoot)runtimes\$(_StoolapHostRid)\native\*.so" />
+      <_StoolapHostNative Include="$(_StoolapPkgRoot)runtimes\$(_StoolapHostRid)\native\*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_StoolapHostNative)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>
