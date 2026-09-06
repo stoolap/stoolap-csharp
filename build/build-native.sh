@@ -11,7 +11,7 @@ set -euo pipefail
 
 # Pin the stoolap engine version in one place. The CI workflows read the
 # same value via the STOOLAP_ENGINE_REF env var in .github/workflows/*.yml.
-STOOLAP_ENGINE_REF="${STOOLAP_ENGINE_REF:-v0.4.0}"
+STOOLAP_ENGINE_REF="${STOOLAP_ENGINE_REF:-v0.4.1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CSHARP_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"

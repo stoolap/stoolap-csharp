@@ -8,7 +8,7 @@
     <IsAotCompatible>true</IsAotCompatible>
 
     <PackageId>Stoolap</PackageId>
-    <Version>0.4.0</Version>
+    <Version>0.4.1</Version>
     <Description>Embedded SQL database driver for .NET. P/Invoke binding to libstoolap with ADO.NET integration.</Description>
     <PackageTags>database;sql;embedded;mvcc;acid;stoolap;ado.net</PackageTags>
     <IncludeBuildOutput>true</IncludeBuildOutput>
