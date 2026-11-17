@@ -143,7 +143,24 @@ public sealed class StoolapCommand : DbCommand
                 ? _connection!.Inner!.QueryStream(sql)
                 : _connection!.Inner!.QueryStream(sql, args);
         }
-        return new StoolapDataReader(rows);
+        StoolapDataReader reader;
+        try
+        {
+            reader = new StoolapDataReader(rows, _connection!, behavior);
+        }
+        catch
+        {
+            // The constructor reads ahead; a runtime error there must not leak
+            // the handle, and CloseConnection still applies to the failed reader.
+            rows.Dispose();
+            if ((behavior & CommandBehavior.CloseConnection) != 0)
+            {
+                _connection!.Close();
+            }
+            throw;
+        }
+        _connection!.RegisterReader(reader);
+        return reader;
     }
 
     private (string sql, object?[] args) BuildPositional()
@@ -153,12 +170,22 @@ public sealed class StoolapCommand : DbCommand
             throw new InvalidOperationException("CommandText is required.");
         }
 
+        var rewrite = NamedParameterRewriter.Rewrite(CommandText);
+        if (rewrite.ParameterNames.Count > 0 && rewrite.HasPositional)
+        {
+            throw new InvalidOperationException(
+                "SQL mixes named placeholders (@name, :name, $name) with positional ones (?, $1). Use one style per command.");
+        }
         if (_parameters.Count == 0)
         {
+            if (rewrite.ParameterNames.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"SQL references parameter '{rewrite.ParameterNames[0]}' but no matching parameter was supplied.");
+            }
             return (CommandText, Array.Empty<object?>());
         }
 
-        var rewrite = NamedParameterRewriter.Rewrite(CommandText);
         if (rewrite.ParameterNames.Count == 0)
         {
             // SQL had no named placeholders, but parameters were added; treat

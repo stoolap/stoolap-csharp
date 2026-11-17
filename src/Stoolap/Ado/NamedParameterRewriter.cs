@@ -26,21 +26,34 @@ internal static class NamedParameterRewriter
 {
     public readonly struct Result
     {
-        public Result(string sql, IReadOnlyList<string> parameterNames)
+        public Result(string sql, IReadOnlyList<string> parameterNames, bool hasPositional)
         {
             Sql = sql;
             ParameterNames = parameterNames;
+            HasPositional = hasPositional;
         }
 
-        /// <summary>SQL with all named placeholders replaced by <c>?</c>.</summary>
+        /// <summary>
+        /// SQL with every named placeholder replaced by a numbered one
+        /// (<c>$1</c>, <c>$2</c>, ...), one number per distinct name.
+        /// </summary>
         public string Sql { get; }
 
         /// <summary>
-        /// Ordered list of parameter names (without sigil) in the order they
-        /// were encountered. May contain duplicates: if the same name appears
-        /// twice in the SQL, it appears twice here.
+        /// Distinct parameter names (without sigil) in order of first
+        /// appearance; the name at index <c>i</c> binds <c>$(i + 1)</c>. A name
+        /// used twice is one parameter: since engine 0.5.0 two anonymous
+        /// <c>?</c> are two different expressions, so <c>GROUP BY g + @x</c>
+        /// only matches <c>SELECT g + @x</c> when both refer to the same slot.
         /// </summary>
         public IReadOnlyList<string> ParameterNames { get; }
+
+        /// <summary>
+        /// True when the SQL also holds positional placeholders (<c>?</c> or
+        /// <c>$1</c>) outside literals and comments. Mixed with named ones
+        /// they would share the numbered slots and bind the wrong values.
+        /// </summary>
+        public bool HasPositional { get; }
     }
 
     public static Result Rewrite(string sql)
@@ -48,11 +61,12 @@ internal static class NamedParameterRewriter
         // Fast path: no sigil characters, nothing to do.
         if (sql.IndexOfAny(SigilChars) < 0)
         {
-            return new Result(sql, Array.Empty<string>());
+            return new Result(sql, Array.Empty<string>(), hasPositional: false);
         }
 
         var sb = new StringBuilder(sql.Length);
         var names = new List<string>(4);
+        bool hasPositional = false;
         int i = 0;
         int len = sql.Length;
 
@@ -79,6 +93,37 @@ internal static class NamedParameterRewriter
                     i++;
                 }
                 sb.Append(sql, start, i - start);
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                // Backtick-quoted identifier: `a@b` names a column, not a parameter.
+                int start = i;
+                i++;
+                while (i < len)
+                {
+                    if (sql[i] == '`' && i + 1 < len && sql[i + 1] == '`')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    if (sql[i] == '`')
+                    {
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+                sb.Append(sql, start, i - start);
+                continue;
+            }
+
+            if (ch == ':' && i + 1 < len && sql[i + 1] == ':')
+            {
+                // A `::` cast operator, not the start of a :name parameter.
+                sb.Append("::");
+                i += 2;
                 continue;
             }
 
@@ -140,17 +185,27 @@ internal static class NamedParameterRewriter
                     j++;
                 }
                 string name = sql.Substring(nameStart, j - nameStart);
-                names.Add(name);
-                sb.Append('?');
+                int slot = names.IndexOf(name);
+                if (slot < 0)
+                {
+                    names.Add(name);
+                    slot = names.Count - 1;
+                }
+                sb.Append('$').Append(slot + 1);
                 i = j;
                 continue;
+            }
+
+            if (ch == '?' || (ch == '$' && i + 1 < len && char.IsAsciiDigit(sql[i + 1])))
+            {
+                hasPositional = true;
             }
 
             sb.Append(ch);
             i++;
         }
 
-        return new Result(sb.ToString(), names);
+        return new Result(sb.ToString(), names, hasPositional);
     }
 
     private static readonly char[] SigilChars = ['@', ':', '$'];

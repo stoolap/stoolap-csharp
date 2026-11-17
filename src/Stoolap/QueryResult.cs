@@ -9,8 +9,8 @@
 namespace Stoolap;
 
 /// <summary>
-/// Materialized result set produced by <c>Database.Query()</c>. Decoded from
-/// the binary <c>stoolap_rows_fetch_all</c> buffer in a single pass with no
+/// Materialized result set produced by <c>Query()</c>. Decoded from the packed
+/// buffer of a one-call <c>stoolap_*_query_all</c> in a single pass with no
 /// per-row P/Invoke crossings.
 /// </summary>
 public sealed class QueryResult

@@ -23,6 +23,7 @@ namespace Stoolap;
 public sealed class Database : IDisposable
 {
     private readonly StoolapDbHandle _handle;
+    private readonly ColumnHeaderCache _columns = new();
     private bool _disposed;
 
     private Database(StoolapDbHandle handle)
@@ -172,19 +173,14 @@ public sealed class Database : IDisposable
 
     /// <summary>
     /// Runs a query and returns a fully-materialized <see cref="QueryResult"/>.
-    /// Uses the binary fetch-all path: one P/Invoke crossing per call, no
-    /// per-cell marshalling.
+    /// One P/Invoke call per query: the engine runs the statement and packs
+    /// every row into a single buffer, decoded with no per-cell crossings.
     /// </summary>
     public QueryResult Query(string sql)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(sql);
-        int rc = NativeMethods.stoolap_query(_handle.DangerousGetHandle(), sql, out var rawRows);
-        if (rc != StatusCodes.Ok || rawRows == 0)
-        {
-            throw StoolapException.FromDb(_handle.DangerousGetHandle());
-        }
-        return FetchAllAndClose(rawRows);
+        return QueryAll(0, sql, ReadOnlySpan<object?>.Empty);
     }
 
     /// <summary>Runs a parameterized query and returns a fully-materialized result.</summary>
@@ -193,15 +189,20 @@ public sealed class Database : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(parameters);
-        return QueryCore(sql, parameters);
+        return QueryAll(0, sql, parameters);
     }
 
-    private QueryResult QueryCore(string sql, ReadOnlySpan<object?> parameters)
+    /// <summary>
+    /// Runs <paramref name="sql"/> through <c>stoolap_query_params_all</c>,
+    /// inside <paramref name="tx"/> when it is not 0. The packed buffer belongs
+    /// to this connection's handle and is decoded before returning.
+    /// </summary>
+    [SkipLocalsInit]
+    internal QueryResult QueryAll(nint tx, string sql, ReadOnlySpan<object?> parameters)
     {
         var binder = default(ParameterBinder);
         try
         {
-            nint rawRows;
             unsafe
             {
                 Span<StoolapValue> values = parameters.Length <= 16
@@ -211,15 +212,17 @@ public sealed class Database : IDisposable
                 fixed (StoolapValue* ptr = values)
                 {
                     binder.Bind(parameters, ptr, scratch, ParameterBinder.RecommendedScratchSize);
-                    int rc = NativeMethods.stoolap_query_params(
-                        _handle.DangerousGetHandle(), sql, ptr, parameters.Length, out rawRows);
-                    if (rc != StatusCodes.Ok || rawRows == 0)
+                    var db = _handle.DangerousGetHandle();
+                    int rc = NativeMethods.stoolap_query_params_all(
+                        db, tx, sql, ptr, parameters.Length, out var buf, out var len);
+                    if (rc != StatusCodes.Ok || buf == 0)
                     {
-                        throw StoolapException.FromDb(_handle.DangerousGetHandle());
+                        throw StoolapException.FromDb(db);
                     }
+                    return BinaryRowParser.Parse(
+                        new ReadOnlySpan<byte>((void*)buf, checked((int)len)), _columns);
                 }
             }
-            return FetchAllAndClose(rawRows);
         }
         finally
         {
@@ -313,7 +316,7 @@ public sealed class Database : IDisposable
         }
         var handle = new StoolapTxHandle();
         Marshal.InitHandle(handle, rawTx);
-        return new Transaction(handle);
+        return new Transaction(handle, this);
     }
 
     /// <summary>Begins a transaction with an explicit isolation level.</summary>
@@ -328,38 +331,14 @@ public sealed class Database : IDisposable
         }
         var handle = new StoolapTxHandle();
         Marshal.InitHandle(handle, rawTx);
-        return new Transaction(handle);
+        return new Transaction(handle, this);
     }
 
     // ----- internals -----
 
     internal nint DangerousHandle => _handle.DangerousGetHandle();
 
-    private static QueryResult FetchAllAndClose(nint rawRows)
-    {
-        int rc = NativeMethods.stoolap_rows_fetch_all(rawRows, out var buf, out var len);
-        try
-        {
-            if (rc != StatusCodes.Ok || buf == 0)
-            {
-                throw StoolapException.FromRows(rawRows);
-            }
-            unsafe
-            {
-                var span = new ReadOnlySpan<byte>((void*)buf, checked((int)len));
-                var decoded = BinaryRowParser.Parse(span);
-                return new QueryResult(decoded.Columns, decoded.Rows);
-            }
-        }
-        finally
-        {
-            if (buf != 0)
-            {
-                NativeMethods.stoolap_buffer_free(buf, len);
-            }
-            NativeMethods.stoolap_rows_close(rawRows);
-        }
-    }
+    internal StoolapDbHandle Handle => _handle;
 
     private void ThrowIfDisposed()
     {

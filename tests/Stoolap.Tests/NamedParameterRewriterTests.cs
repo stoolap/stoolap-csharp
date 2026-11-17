@@ -38,7 +38,7 @@ public class NamedParameterRewriterTests
     public void SingleAtSigil_Rewritten()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT * FROM t WHERE id = @id");
-        Assert.Equal("SELECT * FROM t WHERE id = ?", r.Sql);
+        Assert.Equal("SELECT * FROM t WHERE id = $1", r.Sql);
         Assert.Equal(new[] { "id" }, r.ParameterNames);
     }
 
@@ -46,7 +46,7 @@ public class NamedParameterRewriterTests
     public void SingleColonSigil_Rewritten()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT * FROM t WHERE id = :id");
-        Assert.Equal("SELECT * FROM t WHERE id = ?", r.Sql);
+        Assert.Equal("SELECT * FROM t WHERE id = $1", r.Sql);
         Assert.Equal(new[] { "id" }, r.ParameterNames);
     }
 
@@ -54,7 +54,7 @@ public class NamedParameterRewriterTests
     public void SingleDollarSigil_Rewritten()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT * FROM t WHERE id = $id");
-        Assert.Equal("SELECT * FROM t WHERE id = ?", r.Sql);
+        Assert.Equal("SELECT * FROM t WHERE id = $1", r.Sql);
         Assert.Equal(new[] { "id" }, r.ParameterNames);
     }
 
@@ -62,23 +62,23 @@ public class NamedParameterRewriterTests
     public void MixedSigils_AllRewritten_OrderPreserved()
     {
         var r = NamedParameterRewriter.Rewrite("INSERT INTO t VALUES (@a, :b, $c)");
-        Assert.Equal("INSERT INTO t VALUES (?, ?, ?)", r.Sql);
+        Assert.Equal("INSERT INTO t VALUES ($1, $2, $3)", r.Sql);
         Assert.Equal(new[] { "a", "b", "c" }, r.ParameterNames);
     }
 
     [Fact]
-    public void DuplicateParameterName_AppearsTwice()
+    public void DuplicateParameterName_SharesOneSlot()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT * FROM t WHERE a = @x OR b = @x");
-        Assert.Equal("SELECT * FROM t WHERE a = ? OR b = ?", r.Sql);
-        Assert.Equal(new[] { "x", "x" }, r.ParameterNames);
+        Assert.Equal("SELECT * FROM t WHERE a = $1 OR b = $1", r.Sql);
+        Assert.Equal(new[] { "x" }, r.ParameterNames);
     }
 
     [Fact]
     public void SigilInsideStringLiteral_NotRewritten()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT 'hello @world' FROM t WHERE id = @id");
-        Assert.Equal("SELECT 'hello @world' FROM t WHERE id = ?", r.Sql);
+        Assert.Equal("SELECT 'hello @world' FROM t WHERE id = $1", r.Sql);
         Assert.Equal(new[] { "id" }, r.ParameterNames);
     }
 
@@ -86,7 +86,7 @@ public class NamedParameterRewriterTests
     public void EscapedQuoteInsideLiteral_NotRewritten()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT 'it''s @done' FROM t WHERE id = @id");
-        Assert.Equal("SELECT 'it''s @done' FROM t WHERE id = ?", r.Sql);
+        Assert.Equal("SELECT 'it''s @done' FROM t WHERE id = $1", r.Sql);
         Assert.Equal(new[] { "id" }, r.ParameterNames);
     }
 
@@ -94,7 +94,7 @@ public class NamedParameterRewriterTests
     public void SigilInsideQuotedIdentifier_NotRewritten()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT \"col@name\" FROM t WHERE id = @id");
-        Assert.Equal("SELECT \"col@name\" FROM t WHERE id = ?", r.Sql);
+        Assert.Equal("SELECT \"col@name\" FROM t WHERE id = $1", r.Sql);
         Assert.Equal(new[] { "id" }, r.ParameterNames);
     }
 
@@ -102,7 +102,7 @@ public class NamedParameterRewriterTests
     public void EscapedDoubleQuoteInsideIdentifier_NotRewritten()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT \"a\"\"@b\" FROM t WHERE id = @id");
-        Assert.Equal("SELECT \"a\"\"@b\" FROM t WHERE id = ?", r.Sql);
+        Assert.Equal("SELECT \"a\"\"@b\" FROM t WHERE id = $1", r.Sql);
         Assert.Equal(new[] { "id" }, r.ParameterNames);
     }
 
@@ -110,7 +110,7 @@ public class NamedParameterRewriterTests
     public void SigilInsideLineComment_NotRewritten()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT 1 -- comment with @ignored\nFROM t WHERE id = @id");
-        Assert.Contains("?", r.Sql);
+        Assert.Contains("$1", r.Sql);
         Assert.DoesNotContain("@id", r.Sql);
         Assert.Contains("@ignored", r.Sql);
         Assert.Equal(new[] { "id" }, r.ParameterNames);
@@ -129,7 +129,7 @@ public class NamedParameterRewriterTests
     public void EmailAddressInLiteral_NotRewritten()
     {
         var r = NamedParameterRewriter.Rewrite("INSERT INTO t VALUES ('alice@example.com', @id)");
-        Assert.Equal("INSERT INTO t VALUES ('alice@example.com', ?)", r.Sql);
+        Assert.Equal("INSERT INTO t VALUES ('alice@example.com', $1)", r.Sql);
         Assert.Equal(new[] { "id" }, r.ParameterNames);
     }
 
@@ -137,7 +137,7 @@ public class NamedParameterRewriterTests
     public void ParameterNameWithUnderscores_AllowedInIdentifier()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT * FROM t WHERE id = @user_id_value");
-        Assert.Equal("SELECT * FROM t WHERE id = ?", r.Sql);
+        Assert.Equal("SELECT * FROM t WHERE id = $1", r.Sql);
         Assert.Equal(new[] { "user_id_value" }, r.ParameterNames);
     }
 
@@ -145,7 +145,7 @@ public class NamedParameterRewriterTests
     public void ParameterNameWithDigits_AllowedAfterFirstChar()
     {
         var r = NamedParameterRewriter.Rewrite("SELECT @p1, @p2, @p3");
-        Assert.Equal("SELECT ?, ?, ?", r.Sql);
+        Assert.Equal("SELECT $1, $2, $3", r.Sql);
         Assert.Equal(new[] { "p1", "p2", "p3" }, r.ParameterNames);
     }
 
@@ -166,5 +166,31 @@ public class NamedParameterRewriterTests
         var r = NamedParameterRewriter.Rewrite("SELECT @1col FROM t");
         Assert.Equal("SELECT @1col FROM t", r.Sql);
         Assert.Empty(r.ParameterNames);
+    }
+
+    [Fact]
+    public void SigilInsideBacktickIdentifier_NotRewritten()
+    {
+        var r = NamedParameterRewriter.Rewrite("SELECT `a@b`, `x``@y` FROM t WHERE id = @id");
+        Assert.Equal("SELECT `a@b`, `x``@y` FROM t WHERE id = $1", r.Sql);
+        Assert.Equal(new[] { "id" }, r.ParameterNames);
+    }
+
+    [Fact]
+    public void DoubleColonCast_NotRewritten()
+    {
+        var r = NamedParameterRewriter.Rewrite("SELECT x::INTEGER, :y::TEXT FROM t");
+        Assert.Equal("SELECT x::INTEGER, $1::TEXT FROM t", r.Sql);
+        Assert.Equal(new[] { "y" }, r.ParameterNames);
+    }
+
+    [Theory]
+    [InlineData("SELECT @a + ?", true)]
+    [InlineData("SELECT $1, @a", true)]
+    [InlineData("SELECT @a, '?', '$1' -- ?\n /* $2 */", false)]
+    [InlineData("SELECT @a, \"q?\", `$1`", false)]
+    public void PositionalPlaceholders_AreDetected(string sql, bool expected)
+    {
+        Assert.Equal(expected, NamedParameterRewriter.Rewrite(sql).HasPositional);
     }
 }

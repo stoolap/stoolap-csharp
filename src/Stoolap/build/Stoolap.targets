@@ -23,10 +23,9 @@
       <_StoolapHostNative Include="$(_StoolapPkgRoot)runtimes\$(_StoolapHostRid)\native\*.dll" />
     </ItemGroup>
     <!--
-      Copy into a runtimes/<rid>/native subfolder of the output, not the root.
-      On Windows this avoids a case-insensitive filename collision between
-      the managed Stoolap.dll and the native stoolap.dll. The LibraryResolver
-      probes this exact path at runtime.
+      Copy into a runtimes/<rid>/native subfolder of the output, not the root,
+      matching the NuGet layout. The LibraryResolver probes this exact path
+      first at runtime.
     -->
     <Copy SourceFiles="@(_StoolapHostNative)"
           DestinationFolder="$(OutDir)runtimes\$(_StoolapHostRid)\native"

@@ -22,6 +22,10 @@ public sealed class StoolapConnection : DbConnection
     private string _connectionString;
     private ConnectionState _state = ConnectionState.Closed;
 
+    // Ended by Close(), so nothing keeps running on a closed connection.
+    private readonly List<StoolapTransaction> _transactions = new();
+    private readonly List<StoolapDataReader> _readers = new();
+
     public StoolapConnection() : this(string.Empty) { }
 
     public StoolapConnection(string connectionString)
@@ -79,16 +83,50 @@ public sealed class StoolapConnection : DbConnection
         _state = ConnectionState.Open;
     }
 
+    /// <summary>
+    /// Closes the connection. Open data readers are closed and transactions
+    /// that have not ended are rolled back first, as ADO.NET requires.
+    /// </summary>
     public override void Close()
     {
         if (_state == ConnectionState.Closed)
         {
             return;
         }
+        // Mark closed first: a reader opened with CommandBehavior.CloseConnection
+        // calls back into Close() and must find nothing left to do.
+        _state = ConnectionState.Closed;
+
+        var readers = _readers.ToArray();
+        _readers.Clear();
+        foreach (var reader in readers)
+        {
+            reader.CloseFromConnection();
+        }
+
+        var transactions = _transactions.ToArray();
+        _transactions.Clear();
+        foreach (var tx in transactions)
+        {
+            tx.Dispose(); // rolls back if still open
+        }
+
         _database?.Dispose();
         _database = null;
-        _state = ConnectionState.Closed;
     }
+
+    internal void RegisterReader(StoolapDataReader reader) => _readers.Add(reader);
+
+    internal void OnReaderClosed(StoolapDataReader reader, bool closeConnection)
+    {
+        _readers.Remove(reader);
+        if (closeConnection)
+        {
+            Close();
+        }
+    }
+
+    internal void OnTransactionEnded(StoolapTransaction tx) => _transactions.Remove(tx);
 
     public override void ChangeDatabase(string databaseName)
         => throw new NotSupportedException("Stoolap does not support multiple catalogs per connection.");
@@ -104,8 +142,9 @@ public sealed class StoolapConnection : DbConnection
             IsolationLevel.Unspecified or IsolationLevel.ReadCommitted => StoolapIsolationLevel.ReadCommitted,
             _ => throw new NotSupportedException($"Isolation level {isolationLevel} is not supported by stoolap."),
         };
-        var tx = _database!.Begin(native);
-        return new StoolapTransaction(this, tx, isolationLevel);
+        var tx = new StoolapTransaction(this, _database!.Begin(native), isolationLevel);
+        _transactions.Add(tx);
+        return tx;
     }
 
     protected override void Dispose(bool disposing)

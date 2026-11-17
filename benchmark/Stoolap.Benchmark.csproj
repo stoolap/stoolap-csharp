@@ -21,9 +21,8 @@
 
   <!--
     Copy the host platform's native library into a runtimes/<rid>/native
-    subfolder of the benchmark output, NOT the root, so the native
-    stoolap.dll does not collide with the managed Stoolap.dll on Windows.
-    Stoolap.Native.LibraryResolver probes this exact path at runtime.
+    subfolder of the benchmark output, NOT the root, matching the NuGet
+    layout that Stoolap.Native.LibraryResolver probes first at runtime.
   -->
   <ItemGroup>
     <None Include="..\runtimes\osx-arm64\native\libstoolap.dylib"
@@ -46,9 +45,9 @@
           Link="runtimes\linux-arm64\native\libstoolap.so"
           CopyToOutputDirectory="PreserveNewest"
           Visible="false" />
-    <None Include="..\runtimes\win-x64\native\stoolap.dll"
-          Condition="Exists('..\runtimes\win-x64\native\stoolap.dll') and $([MSBuild]::IsOSPlatform('Windows'))"
-          Link="runtimes\win-x64\native\stoolap.dll"
+    <None Include="..\runtimes\win-x64\native\libstoolap.dll"
+          Condition="Exists('..\runtimes\win-x64\native\libstoolap.dll') and $([MSBuild]::IsOSPlatform('Windows'))"
+          Link="runtimes\win-x64\native\libstoolap.dll"
           CopyToOutputDirectory="PreserveNewest"
           Visible="false" />
   </ItemGroup>

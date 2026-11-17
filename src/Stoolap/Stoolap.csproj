@@ -8,16 +8,21 @@
     <IsAotCompatible>true</IsAotCompatible>
 
     <PackageId>Stoolap</PackageId>
-    <Version>0.4.2</Version>
+    <Version>0.5.0</Version>
     <Description>Embedded SQL database driver for .NET. P/Invoke binding to libstoolap with ADO.NET integration.</Description>
     <PackageTags>database;sql;embedded;mvcc;acid;stoolap;ado.net</PackageTags>
     <IncludeBuildOutput>true</IncludeBuildOutput>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <IncludeSymbols>true</IncludeSymbols>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Stoolap.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,10 +42,13 @@
           Pack="true"
           PackagePath="runtimes/linux-arm64/native/libstoolap.so"
           Condition="Exists('..\..\runtimes\linux-arm64\native\libstoolap.so')" />
-    <None Include="..\..\runtimes\win-x64\native\stoolap.dll"
+    <!-- libstoolap.dll, not stoolap.dll: a RID-specific build or publish
+         copies natives next to the managed assembly, and on Windows
+         "stoolap.dll" would collide with "Stoolap.dll" (NETSDK1152). -->
+    <None Include="..\..\runtimes\win-x64\native\libstoolap.dll"
           Pack="true"
-          PackagePath="runtimes/win-x64/native/stoolap.dll"
-          Condition="Exists('..\..\runtimes\win-x64\native\stoolap.dll')" />
+          PackagePath="runtimes/win-x64/native/libstoolap.dll"
+          Condition="Exists('..\..\runtimes\win-x64\native\libstoolap.dll')" />
   </ItemGroup>
 
   <ItemGroup>

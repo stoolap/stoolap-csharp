@@ -6,6 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -13,7 +14,9 @@ using System.Text;
 namespace Stoolap;
 
 /// <summary>
-/// Decoder for the packed binary buffer produced by <c>stoolap_rows_fetch_all</c>.
+/// Decoder for the packed binary result format shared by
+/// <c>stoolap_rows_fetch_all</c> and the <c>stoolap_*_query_all</c> one-call
+/// queries.
 ///
 /// Format (little-endian throughout):
 /// <code>
@@ -39,134 +42,169 @@ namespace Stoolap;
 ///
 /// Decodes with zero per-cell P/Invoke calls and zero managed copies for
 /// numerics; one allocation per text/blob value (unavoidable: the source
-/// buffer is freed after parsing).
+/// buffer belongs to the native handle and is reused by its next call).
 /// </summary>
 internal static class BinaryRowParser
 {
-    /// <summary>Result of decoding a fetch-all buffer.</summary>
-    internal sealed class Decoded
+    // Shared boxes: a BOOLEAN cell costs no allocation.
+    private static readonly object BoxedTrue = true;
+    private static readonly object BoxedFalse = false;
+
+    /// <summary>
+    /// Decodes a whole packed buffer into a <see cref="QueryResult"/>. When
+    /// <paramref name="cache"/> is given and the buffer's column header is
+    /// byte-identical to the cached one, the cached column names are reused
+    /// instead of decoding them again.
+    /// </summary>
+    public static QueryResult Parse(ReadOnlySpan<byte> buf, ColumnHeaderCache? cache)
     {
-        public string[] Columns { get; init; } = Array.Empty<string>();
-        public List<object?[]> Rows { get; init; } = new();
+        int offset = SkipHeader(buf, out int colCount);
+        var columns = cache is null
+            ? DecodeColumns(buf, colCount)
+            : cache.Get(buf.Slice(0, offset), colCount);
+
+        int rowCount = checked((int)ReadUInt32(buf, ref offset));
+        var rows = new object?[rowCount][];
+        for (int r = 0; r < rowCount; r++)
+        {
+            var row = new object?[colCount];
+            for (int c = 0; c < colCount; c++)
+            {
+                row[c] = ReadValue(buf, ref offset);
+            }
+            rows[r] = row;
+        }
+        return new QueryResult(columns, rows);
     }
 
-    public static Decoded Parse(ReadOnlySpan<byte> buf)
+    /// <summary>
+    /// Walks the column header. Returns the offset of the <c>row_count</c>
+    /// field (i.e. the header's byte length).
+    /// </summary>
+    public static int SkipHeader(ReadOnlySpan<byte> buf, out int colCount)
     {
         int offset = 0;
-        uint colCount = ReadUInt32(buf, ref offset);
+        colCount = checked((int)ReadUInt32(buf, ref offset));
+        for (int i = 0; i < colCount; i++)
+        {
+            int nameLen = ReadUInt16(buf, ref offset);
+            offset += nameLen;
+        }
+        return offset;
+    }
+
+    public static string[] DecodeColumns(ReadOnlySpan<byte> buf, int colCount)
+    {
         var columns = new string[colCount];
+        int offset = 4;
         for (int i = 0; i < colCount; i++)
         {
             ushort nameLen = ReadUInt16(buf, ref offset);
             columns[i] = Encoding.UTF8.GetString(buf.Slice(offset, nameLen));
             offset += nameLen;
         }
+        return columns;
+    }
 
-        uint rowCount = ReadUInt32(buf, ref offset);
-        var rows = new List<object?[]>(checked((int)rowCount));
-
-        for (int r = 0; r < rowCount; r++)
+    /// <summary>Decodes the tagged value at <paramref name="offset"/> into a boxed object.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static object? ReadValue(ReadOnlySpan<byte> buf, ref int offset)
+    {
+        byte tag = buf[offset++];
+        switch (tag)
         {
-            var row = new object?[colCount];
-            for (int c = 0; c < colCount; c++)
-            {
-                byte tag = buf[offset++];
-                switch (tag)
+            case 0: // NULL
+                return null;
+            case 1: // INTEGER
+                return ReadInt64(buf, ref offset);
+            case 2: // FLOAT
+                return ReadDouble(buf, ref offset);
+            case 3: // TEXT
+            case 6: // JSON
                 {
-                    case 0: // NULL
-                        row[c] = null;
-                        break;
-                    case 1: // INTEGER
-                        row[c] = ReadInt64(buf, ref offset);
-                        break;
-                    case 2: // FLOAT
-                        row[c] = ReadDouble(buf, ref offset);
-                        break;
-                    case 3: // TEXT
-                        {
-                            uint len = ReadUInt32(buf, ref offset);
-                            row[c] = Encoding.UTF8.GetString(buf.Slice(offset, (int)len));
-                            offset += (int)len;
-                            break;
-                        }
-                    case 4: // BOOLEAN
-                        row[c] = buf[offset++] != 0;
-                        break;
-                    case 5: // TIMESTAMP (nanos since unix epoch, UTC)
-                        {
-                            long nanos = ReadInt64(buf, ref offset);
-                            row[c] = NanosToDateTime(nanos);
-                            break;
-                        }
-                    case 6: // JSON
-                        {
-                            uint len = ReadUInt32(buf, ref offset);
-                            row[c] = Encoding.UTF8.GetString(buf.Slice(offset, (int)len));
-                            offset += (int)len;
-                            break;
-                        }
-                    case 7: // BLOB / VECTOR (packed f32)
-                        {
-                            uint len = ReadUInt32(buf, ref offset);
-                            if (len == 0)
-                            {
-                                row[c] = Array.Empty<float>();
-                            }
-                            else
-                            {
-                                int floatCount = (int)(len / sizeof(float));
-                                var floats = new float[floatCount];
-                                MemoryMarshal.Cast<byte, float>(buf.Slice(offset, (int)len))
-                                    .CopyTo(floats);
-                                row[c] = floats;
-                            }
-                            offset += (int)len;
-                            break;
-                        }
-                    default:
-                        throw new InvalidDataException($"Unknown stoolap value tag: {tag} at offset {offset - 1}");
+                    int len = checked((int)ReadUInt32(buf, ref offset));
+                    var s = Encoding.UTF8.GetString(buf.Slice(offset, len));
+                    offset += len;
+                    return s;
                 }
-            }
-            rows.Add(row);
+            case 4: // BOOLEAN
+                return buf[offset++] != 0 ? BoxedTrue : BoxedFalse;
+            case 5: // TIMESTAMP (nanos since unix epoch, UTC)
+                return NanosToDateTime(ReadInt64(buf, ref offset));
+            case 7: // BLOB / VECTOR (packed f32)
+                {
+                    int len = checked((int)ReadUInt32(buf, ref offset));
+                    var floats = ReadVector(buf.Slice(offset, len));
+                    offset += len;
+                    return floats;
+                }
+            default:
+                throw new InvalidDataException($"Unknown stoolap value tag: {tag} at offset {offset - 1}");
         }
-
-        return new Decoded { Columns = columns, Rows = rows };
     }
 
-    private static DateTime NanosToDateTime(long nanos)
+    public static float[] ReadVector(ReadOnlySpan<byte> payload)
     {
-        long ticks = nanos / 100L;
-        return DateTime.UnixEpoch.AddTicks(ticks);
+        if (payload.Length == 0)
+        {
+            return Array.Empty<float>();
+        }
+        var floats = new float[payload.Length / sizeof(float)];
+        MemoryMarshal.Cast<byte, float>(payload).CopyTo(floats);
+        return floats;
     }
+
+    public static DateTime NanosToDateTime(long nanos) => DateTime.UnixEpoch.AddTicks(nanos / 100L);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint ReadUInt32(ReadOnlySpan<byte> buf, ref int offset)
+    public static uint ReadUInt32(ReadOnlySpan<byte> buf, ref int offset)
     {
-        var v = Unsafe.ReadUnaligned<uint>(ref MemoryMarshal.GetReference(buf.Slice(offset)));
+        var v = BinaryPrimitives.ReadUInt32LittleEndian(buf.Slice(offset));
         offset += 4;
-        return BitConverter.IsLittleEndian ? v : System.Buffers.Binary.BinaryPrimitives.ReverseEndianness(v);
+        return v;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ushort ReadUInt16(ReadOnlySpan<byte> buf, ref int offset)
+    public static ushort ReadUInt16(ReadOnlySpan<byte> buf, ref int offset)
     {
-        var v = Unsafe.ReadUnaligned<ushort>(ref MemoryMarshal.GetReference(buf.Slice(offset)));
+        var v = BinaryPrimitives.ReadUInt16LittleEndian(buf.Slice(offset));
         offset += 2;
-        return BitConverter.IsLittleEndian ? v : System.Buffers.Binary.BinaryPrimitives.ReverseEndianness(v);
+        return v;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long ReadInt64(ReadOnlySpan<byte> buf, ref int offset)
+    public static long ReadInt64(ReadOnlySpan<byte> buf, ref int offset)
     {
-        var v = Unsafe.ReadUnaligned<long>(ref MemoryMarshal.GetReference(buf.Slice(offset)));
+        var v = BinaryPrimitives.ReadInt64LittleEndian(buf.Slice(offset));
         offset += 8;
-        return BitConverter.IsLittleEndian ? v : System.Buffers.Binary.BinaryPrimitives.ReverseEndianness(v);
+        return v;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static double ReadDouble(ReadOnlySpan<byte> buf, ref int offset)
+    public static double ReadDouble(ReadOnlySpan<byte> buf, ref int offset)
+        => BitConverter.Int64BitsToDouble(ReadInt64(buf, ref offset));
+}
+
+/// <summary>
+/// Remembers the last column header seen by one handle (a prepared statement
+/// or a connection) so repeated queries with the same shape skip decoding the
+/// column names. A header that differs in any byte (e.g. after a schema
+/// change) is decoded and replaces the cached one.
+/// </summary>
+internal sealed class ColumnHeaderCache
+{
+    private byte[] _header = Array.Empty<byte>();
+    private IReadOnlyList<string> _columns = Array.Empty<string>();
+
+    public IReadOnlyList<string> Get(ReadOnlySpan<byte> header, int colCount)
     {
-        var bits = ReadInt64(buf, ref offset);
-        return BitConverter.Int64BitsToDouble(bits);
+        if (header.SequenceEqual(_header))
+        {
+            return _columns;
+        }
+        var columns = Array.AsReadOnly(BinaryRowParser.DecodeColumns(header, colCount));
+        _header = header.ToArray();
+        _columns = columns;
+        return columns;
     }
 }

@@ -55,10 +55,7 @@ internal static class LibraryResolver
         var fileName = GetPlatformFileName();
         var baseDir = AppContext.BaseDirectory;
 
-        // Probe the RID-specific subfolder FIRST. This is the canonical NuGet
-        // layout and avoids a case-insensitive filename collision on Windows,
-        // where the native "stoolap.dll" and the managed "Stoolap.dll" would
-        // otherwise live in the same directory and only differ by case.
+        // Probe the RID-specific subfolder FIRST: the canonical NuGet layout.
         var rid = GetRuntimeIdentifier();
         if (rid is not null)
         {
@@ -69,19 +66,15 @@ internal static class LibraryResolver
             }
         }
 
-        // Fall back to a file sitting next to the managed assembly.
-        // Skipped on Windows: the case-insensitive filesystem makes
-        // "stoolap.dll" indistinguishable from this assembly's
-        // "Stoolap.dll". Windows users who want to load a native binary
-        // from a custom location should set STOOLAP_LIB_PATH instead.
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        // Fall back to a file sitting next to the managed assembly, where a
+        // RID-specific build or publish puts it. Safe on Windows too: the
+        // native file is "libstoolap.dll", which cannot be confused with the
+        // managed "Stoolap.dll" on a case-insensitive filesystem.
+        var nextToAssembly = Path.Combine(baseDir, fileName);
+        if (File.Exists(nextToAssembly) &&
+            NativeLibrary.TryLoad(nextToAssembly, out var localHandle))
         {
-            var nextToAssembly = Path.Combine(baseDir, fileName);
-            if (File.Exists(nextToAssembly) &&
-                NativeLibrary.TryLoad(nextToAssembly, out var localHandle))
-            {
-                return localHandle;
-            }
+            return localHandle;
         }
 
         // Last resort: let the OS loader try (handles standard install paths
@@ -95,7 +88,7 @@ internal static class LibraryResolver
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            return "stoolap.dll";
+            return "libstoolap.dll";
         }
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {

@@ -176,12 +176,18 @@ internal static partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "stoolap_rows_affected")]
     public static partial long stoolap_rows_affected(nint rows);
 
-    [LibraryImport(Lib, EntryPoint = "stoolap_rows_fetch_all")]
-    public static partial int stoolap_rows_fetch_all(nint rows, out nint outBuf, out long outLen);
-
-    [LibraryImport(Lib, EntryPoint = "stoolap_buffer_free")]
-    public static partial void stoolap_buffer_free(nint buf, long len);
-
     [LibraryImport(Lib, EntryPoint = "stoolap_rows_errmsg")]
     public static partial nint stoolap_rows_errmsg(nint rows);
+
+    // ----- one-call packed results (engine 0.5.0+) -----
+    // The returned buffer belongs to the db / stmt handle and stays
+    // valid until the next call on that handle. It must NOT be freed.
+
+    [LibraryImport(Lib, EntryPoint = "stoolap_query_params_all", StringMarshalling = StringMarshalling.Utf8)]
+    public static unsafe partial int stoolap_query_params_all(
+        nint db, nint tx, string sql, StoolapValue* parameters, int paramsLen, out nint outBuf, out long outLen);
+
+    [LibraryImport(Lib, EntryPoint = "stoolap_stmt_query_all")]
+    public static unsafe partial int stoolap_stmt_query_all(
+        nint stmt, nint tx, StoolapValue* parameters, int paramsLen, out nint outBuf, out long outLen);
 }

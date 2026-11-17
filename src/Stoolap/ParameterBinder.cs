@@ -80,7 +80,7 @@ internal ref struct ParameterBinder
             case int i: return MakeInt(i);
             case uint ui: return MakeInt(ui);
             case long l: return MakeInt(l);
-            case ulong ul: return MakeInt((long)ul);
+            case ulong ul: return MakeInt(checked((long)ul));
 
             case float f: return MakeFloat(f);
             case double d: return MakeFloat(d);
@@ -94,13 +94,19 @@ internal ref struct ParameterBinder
             case DateTimeOffset dto:
                 return MakeTimestamp(dto.UtcDateTime);
 
+            // Stoolap has no byte BLOB type: a byte payload binds as a VECTOR
+            // of packed little-endian f32 values, and the engine reads any
+            // other length as NULL. Refuse it here instead.
             case byte[] bytes:
+                EnsureVectorPayload(bytes.Length);
                 return MakeBlob(bytes);
 
             case ReadOnlyMemory<byte> rom:
+                EnsureVectorPayload(rom.Length);
                 return MakeBlobFromMemory(rom, scratch, scratchSize, ref scratchUsed);
 
             case Memory<byte> mem:
+                EnsureVectorPayload(mem.Length);
                 return MakeBlobFromMemory(mem, scratch, scratchSize, ref scratchUsed);
 
             case float[] vec:
@@ -109,12 +115,32 @@ internal ref struct ParameterBinder
             case Guid g:
                 return MakeText(g.ToString("D"), StoolapType.Text, scratch, scratchSize, ref scratchUsed);
 
+            case char c:
+                return MakeText(c.ToString(), StoolapType.Text, scratch, scratchSize, ref scratchUsed);
+
+            case Enum e:
+                // Bind the underlying integer, as ADO.NET providers do.
+                return Type.GetTypeCode(e.GetType()) == TypeCode.UInt64
+                    ? MakeInt(checked((long)Convert.ToUInt64(e, System.Globalization.CultureInfo.InvariantCulture)))
+                    : MakeInt(Convert.ToInt64(e, System.Globalization.CultureInfo.InvariantCulture));
+
             default:
-                // Last resort: stringify. Avoid silent dropping.
-                return MakeText(
-                    Convert.ToString(p, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-                    StoolapType.Text,
-                    scratch, scratchSize, ref scratchUsed);
+                // Stringifying an unknown type would store its type name or a
+                // culture-dependent form without complaint.
+                throw new NotSupportedException(
+                    $"Parameter type {p.GetType()} is not supported by Stoolap. Convert it to a supported type " +
+                    "(integer, floating point, string, bool, DateTime, Guid, float[]) first.");
+        }
+    }
+
+    private static void EnsureVectorPayload(int length)
+    {
+        if (length % sizeof(float) != 0)
+        {
+            throw new ArgumentException(
+                $"A byte[] / Memory<byte> parameter binds as a VECTOR payload of packed little-endian float32 values, " +
+                $"so its length must be a multiple of 4 (got {length}). Stoolap has no byte BLOB type; " +
+                "store arbitrary bytes as TEXT (e.g. Base64) instead.");
         }
     }
 
@@ -136,6 +162,13 @@ internal ref struct ParameterBinder
             ? DateTime.SpecifyKind(dt, DateTimeKind.Utc)
             : dt.ToUniversalTime();
         var ticks = (utc - DateTime.UnixEpoch).Ticks; // 100-nanosecond units
+        // i64 nanoseconds cover 1677-09-21 to 2262-04-11; outside that the
+        // multiplication would wrap to a wrong date instead of failing.
+        if (ticks > long.MaxValue / 100L || ticks < long.MinValue / 100L)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(dt), dt, "Stoolap TIMESTAMP values must lie between 1677-09-21 and 2262-04-11 (UTC).");
+        }
         var nanos = ticks * 100L;
         return new StoolapValue
         {

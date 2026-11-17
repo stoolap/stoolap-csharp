@@ -19,11 +19,18 @@ namespace Stoolap;
 public sealed class Transaction : IDisposable
 {
     private readonly StoolapTxHandle _handle;
+    private readonly Database _database;
     private bool _ended;
 
-    internal Transaction(StoolapTxHandle handle)
+    internal Transaction(StoolapTxHandle handle, Database database)
     {
         _handle = handle;
+        _database = database;
+        // Queries run through stoolap_query_params_all, which takes the
+        // connection's handle. Hold a reference on it so disposing the
+        // Database while this transaction is open defers the native close
+        // until the transaction ends, as the engine itself does.
+        handle.HoldDatabase(database.Handle);
     }
 
     public long Execute(string sql)
@@ -75,12 +82,7 @@ public sealed class Transaction : IDisposable
     {
         ThrowIfEnded();
         ArgumentNullException.ThrowIfNull(sql);
-        int rc = NativeMethods.stoolap_tx_query(_handle.DangerousGetHandle(), sql, out var rawRows);
-        if (rc != StatusCodes.Ok || rawRows == 0)
-        {
-            throw StoolapException.FromTx(_handle.DangerousGetHandle());
-        }
-        return FetchAllAndClose(rawRows);
+        return _database.QueryAll(_handle.DangerousGetHandle(), sql, ReadOnlySpan<object?>.Empty);
     }
 
     public QueryResult Query(string sql, params object?[] parameters)
@@ -88,33 +90,7 @@ public sealed class Transaction : IDisposable
         ThrowIfEnded();
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(parameters);
-        var binder = default(ParameterBinder);
-        try
-        {
-            nint rawRows;
-            unsafe
-            {
-                Span<StoolapValue> values = parameters.Length <= 16
-                    ? stackalloc StoolapValue[parameters.Length]
-                    : new StoolapValue[parameters.Length];
-                byte* scratch = stackalloc byte[ParameterBinder.RecommendedScratchSize];
-                fixed (StoolapValue* ptr = values)
-                {
-                    binder.Bind(parameters, ptr, scratch, ParameterBinder.RecommendedScratchSize);
-                    int rc = NativeMethods.stoolap_tx_query_params(
-                        _handle.DangerousGetHandle(), sql, ptr, parameters.Length, out rawRows);
-                    if (rc != StatusCodes.Ok || rawRows == 0)
-                    {
-                        throw StoolapException.FromTx(_handle.DangerousGetHandle());
-                    }
-                }
-            }
-            return FetchAllAndClose(rawRows);
-        }
-        finally
-        {
-            binder.Dispose();
-        }
+        return _database.QueryAll(_handle.DangerousGetHandle(), sql, parameters);
     }
 
     /// <summary>Streaming version of <see cref="Query(string)"/>. Returns a
@@ -214,37 +190,7 @@ public sealed class Transaction : IDisposable
         ThrowIfEnded();
         ArgumentNullException.ThrowIfNull(statement);
         ArgumentNullException.ThrowIfNull(parameters);
-        var binder = default(ParameterBinder);
-        try
-        {
-            nint rawRows;
-            unsafe
-            {
-                Span<StoolapValue> values = parameters.Length <= 16
-                    ? stackalloc StoolapValue[parameters.Length]
-                    : new StoolapValue[parameters.Length];
-                byte* scratch = stackalloc byte[ParameterBinder.RecommendedScratchSize];
-                fixed (StoolapValue* ptr = values)
-                {
-                    binder.Bind(parameters, ptr, scratch, ParameterBinder.RecommendedScratchSize);
-                    int rc = NativeMethods.stoolap_tx_stmt_query(
-                        _handle.DangerousGetHandle(),
-                        statement.DangerousHandle,
-                        ptr,
-                        parameters.Length,
-                        out rawRows);
-                    if (rc != StatusCodes.Ok || rawRows == 0)
-                    {
-                        throw StoolapException.FromTx(_handle.DangerousGetHandle());
-                    }
-                }
-            }
-            return FetchAllAndClose(rawRows);
-        }
-        finally
-        {
-            binder.Dispose();
-        }
+        return statement.QueryAll(_handle.DangerousGetHandle(), parameters);
     }
 
     public void Commit()
@@ -255,6 +201,7 @@ public sealed class Transaction : IDisposable
         var raw = _handle.Detach();
         _ended = true;
         int rc = NativeMethods.stoolap_tx_commit(raw);
+        _handle.ReleaseDatabase();
         if (rc != StatusCodes.Ok)
         {
             // Pull the global error string since the handle is gone.
@@ -273,6 +220,7 @@ public sealed class Transaction : IDisposable
         var raw = _handle.Detach();
         _ended = true;
         int rc = NativeMethods.stoolap_tx_rollback(raw);
+        _handle.ReleaseDatabase();
         if (rc != StatusCodes.Ok)
         {
             var msg = StoolapException.ReadCString(NativeMethods.stoolap_errmsg(0))
@@ -290,33 +238,7 @@ public sealed class Transaction : IDisposable
         // Implicit rollback on dispose. The SafeHandle's ReleaseHandle calls
         // stoolap_tx_rollback for us; just dispose it.
         _ended = true;
-        _handle.Dispose();
-    }
-
-    private static QueryResult FetchAllAndClose(nint rawRows)
-    {
-        int rc = NativeMethods.stoolap_rows_fetch_all(rawRows, out var buf, out var len);
-        try
-        {
-            if (rc != StatusCodes.Ok || buf == 0)
-            {
-                throw StoolapException.FromRows(rawRows);
-            }
-            unsafe
-            {
-                var span = new ReadOnlySpan<byte>((void*)buf, checked((int)len));
-                var decoded = BinaryRowParser.Parse(span);
-                return new QueryResult(decoded.Columns, decoded.Rows);
-            }
-        }
-        finally
-        {
-            if (buf != 0)
-            {
-                NativeMethods.stoolap_buffer_free(buf, len);
-            }
-            NativeMethods.stoolap_rows_close(rawRows);
-        }
+        _handle.Dispose(); // rolls back and releases the database reference
     }
 
     private void ThrowIfEnded()

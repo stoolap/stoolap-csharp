@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  STOOLAP_ENGINE_REF: v0.4.2
+  STOOLAP_ENGINE_REF: v0.5.0
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_NOLOGO: 1
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
@@ -35,6 +35,9 @@ jobs:
             target: x86_64-pc-windows-msvc
             rid: win-x64
             lib: stoolap.dll
+            # Shipped as libstoolap.dll: "stoolap.dll" differs from the managed
+            # Stoolap.dll only by case and collides with it on Windows.
+            out: libstoolap.dll
 
     name: Build native - ${{ matrix.settings.target }}
     runs-on: ${{ matrix.settings.host }}
@@ -67,11 +70,16 @@ jobs:
         if: runner.os == 'Linux'
         run: strip stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.lib }}
 
+      - name: Rename shared library
+        if: matrix.settings.out
+        shell: bash
+        run: mv stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.lib }} stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.out }}
+
       - name: Upload native library
         uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.settings.rid }}
-          path: stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.lib }}
+          path: stoolap-engine/target/${{ matrix.settings.target }}/release/${{ matrix.settings.out || matrix.settings.lib }}
           if-no-files-found: error
 
   test:
@@ -89,7 +97,7 @@ jobs:
             lib: libstoolap.so
           - os: windows-latest
             rid: win-x64
-            lib: stoolap.dll
+            lib: libstoolap.dll
         dotnet: ['8.0.x', '9.0.x']
     runs-on: ${{ matrix.settings.os }}
     steps:
@@ -120,6 +128,23 @@ jobs:
 
       - name: Test
         run: dotnet test -c Release --no-build --verbosity normal
+
+      # Consume the packed nupkg the way users do, with and without a RID.
+      # A RID-specific publish copies the native next to Stoolap.dll, which
+      # is where a case-only name clash on Windows would surface (NETSDK1152).
+      - name: Package consumer smoke test
+        shell: bash
+        run: |
+          # -p:, not /p:, so Git Bash on Windows does not rewrite it as a path.
+          dotnet pack src/Stoolap/Stoolap.csproj -c Release -o "$RUNNER_TEMP/pkgs" -p:Version=0.0.0-ci
+          cd "$RUNNER_TEMP"
+          dotnet new console -o consumer
+          cd consumer
+          dotnet add package Stoolap --version 0.0.0-ci --source "$RUNNER_TEMP/pkgs"
+          printf '%s\n' 'using var db = Stoolap.Database.OpenInMemory();' 'Console.WriteLine(db.Query("SELECT 1 + 1")[0, 0]);' > Program.cs
+          test "$(dotnet run -c Release | tr -d '\r')" = "2"
+          dotnet publish -c Release -r ${{ matrix.settings.rid }} --self-contained false -o out
+          test "$(dotnet out/consumer.dll | tr -d '\r')" = "2"
 
   format:
     name: Format check

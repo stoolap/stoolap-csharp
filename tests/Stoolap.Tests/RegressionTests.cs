@@ -121,13 +121,11 @@ public class RegressionTests
         // constructor peek + native type snapshot, we should still report
         // the actual column type via the native FFI's column_type query.
         Assert.Equal(typeof(long), r.GetFieldType(0));
-        // Note: stoolap's ffi reports NULL columns as STOOLAP_TYPE_NULL, so
-        // when the first (and only) row has NULL the current FFI can not
-        // distinguish "NULL TEXT" from "NULL INTEGER". Either the native type
-        // or typeof(object) is acceptable here; we only check that the call
-        // does not throw.
-        var nullableType = r.GetFieldType(1);
-        Assert.NotNull(nullableType);
+        // The engine reports a value's type, not a column's: with NULL in
+        // the only row there is nothing to learn the type from, so the
+        // reader reports object. A later non-NULL row is covered by
+        // AdoContractTests.Reader_LooksAheadPastNullFirstRows.
+        Assert.Equal(typeof(object), r.GetFieldType(1));
     }
 
     // ----- P2 Command transaction lifecycle --------------------------------
@@ -285,5 +283,79 @@ public class RegressionTests
         using var r = cmd.ExecuteReader();
         // Metadata calls are fine before Read(), but value accessors must throw.
         Assert.Throws<InvalidOperationException>(() => r.GetInt64(0));
+    }
+
+    [Fact]
+    public void Transaction_ExecuteDisposedStatement_Throws()
+    {
+        // Used to pass the freed native pointer to stoolap_tx_stmt_exec (segfault).
+        using var db = Database.OpenInMemory();
+        db.Execute("CREATE TABLE t (id INTEGER)");
+        var stmt = db.Prepare("INSERT INTO t VALUES (?)");
+        stmt.Dispose();
+        using var tx = db.Begin();
+        Assert.Throws<ObjectDisposedException>(() => tx.Execute(stmt, 1L));
+        Assert.Throws<ObjectDisposedException>(() => tx.Query(stmt, 1L));
+    }
+
+    [Theory]
+    [InlineData(1600, 1, 1)]
+    [InlineData(2300, 1, 1)]
+    [InlineData(1, 1, 1)]
+    public void DateTimeParameter_OutsideTimestampRange_Throws(int year, int month, int day)
+    {
+        // Used to wrap around silently: 2300-01-01 was stored as 1715-06-13.
+        using var db = Database.OpenInMemory();
+        db.Execute("CREATE TABLE t (ts TIMESTAMP)");
+        var dt = new DateTime(year, month, day, 0, 0, 0, DateTimeKind.Utc);
+        Assert.Throws<ArgumentOutOfRangeException>(() => db.Execute("INSERT INTO t VALUES (?)", dt));
+    }
+
+    [Fact]
+    public void DateTimeParameter_AtRangeEdges_RoundTrips()
+    {
+        using var db = Database.OpenInMemory();
+        db.Execute("CREATE TABLE t (id INTEGER, ts TIMESTAMP)");
+        var low = new DateTime(1677, 9, 22, 0, 0, 0, DateTimeKind.Utc);
+        var high = new DateTime(2262, 4, 10, 0, 0, 0, DateTimeKind.Utc);
+        db.Execute("INSERT INTO t VALUES (1, ?), (2, ?)", low, high);
+        var r = db.Query("SELECT ts FROM t ORDER BY id");
+        Assert.Equal(low, r[0, 0]);
+        Assert.Equal(high, r[1, 0]);
+    }
+
+    [Fact]
+    public void UlongParameter_AboveInt64_Throws()
+    {
+        // Used to be stored as -1.
+        using var db = Database.OpenInMemory();
+        Assert.Throws<OverflowException>(() => db.Query("SELECT ?", ulong.MaxValue));
+        Assert.Equal(42L, db.Query("SELECT ?", 42UL)[0, 0]);
+    }
+
+    [Fact]
+    public void NamedParameter_UsedTwice_IsOneExpression()
+    {
+        // Engine 0.5.0 treats two anonymous ? as different expressions, so
+        // GROUP BY g + ? did not match SELECT g + ?.
+        using var conn = new StoolapConnection($"Data Source=memory://reg-{Guid.NewGuid():N}");
+        conn.Open();
+        using (var ddl = conn.CreateCommand())
+        {
+            ddl.CommandText = "CREATE TABLE t (g INTEGER)";
+            ddl.ExecuteNonQuery();
+            ddl.CommandText = "INSERT INTO t VALUES (1), (1), (2)";
+            ddl.ExecuteNonQuery();
+        }
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT g + @x AS k, COUNT(*) FROM t GROUP BY g + @x ORDER BY k";
+        cmd.Parameters.Add(new StoolapParameter("@x", 10L));
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read());
+        Assert.Equal(11L, r.GetInt64(0));
+        Assert.Equal(2L, r.GetInt64(1));
+        Assert.True(r.Read());
+        Assert.Equal(12L, r.GetInt64(0));
+        Assert.False(r.Read());
     }
 }

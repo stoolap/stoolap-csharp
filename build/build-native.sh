@@ -11,7 +11,7 @@ set -euo pipefail
 
 # Pin the stoolap engine version in one place. The CI workflows read the
 # same value via the STOOLAP_ENGINE_REF env var in .github/workflows/*.yml.
-STOOLAP_ENGINE_REF="${STOOLAP_ENGINE_REF:-v0.4.2}"
+STOOLAP_ENGINE_REF="${STOOLAP_ENGINE_REF:-v0.5.0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CSHARP_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -65,7 +65,9 @@ case "${unameOut}" in
       *) echo "Unsupported Windows arch: ${arch}" >&2; exit 1 ;;
     esac
     src="${STOOLAP_ROOT}/target/release/stoolap.dll"
-    dst_name="stoolap.dll"
+    # Renamed so it cannot collide with the managed Stoolap.dll on Windows'
+    # case-insensitive filesystem.
+    dst_name="libstoolap.dll"
     ;;
   *)
     echo "Unsupported platform: ${unameOut}" >&2

@@ -20,6 +20,7 @@ public sealed class Rows : IDisposable
 {
     private readonly StoolapRowsHandle _handle;
     private string[]? _columnCache;
+    private int _columnCount = -1;
     private bool _hasCurrent;
     private bool _disposed;
 
@@ -34,7 +35,11 @@ public sealed class Rows : IDisposable
         get
         {
             ThrowIfDisposed();
-            return NativeMethods.stoolap_rows_column_count(_handle.DangerousGetHandle());
+            if (_columnCount < 0)
+            {
+                _columnCount = NativeMethods.stoolap_rows_column_count(_handle.DangerousGetHandle());
+            }
+            return _columnCount;
         }
     }
 
@@ -96,20 +101,20 @@ public sealed class Rows : IDisposable
     /// <summary>Returns the type of the value at <paramref name="index"/> in the current row.</summary>
     public StoolapType GetFieldType(int index)
     {
-        EnsureCurrent();
+        EnsureCurrent(index);
         return (StoolapType)NativeMethods.stoolap_rows_column_type(_handle.DangerousGetHandle(), index);
     }
 
     /// <summary>True if the column at <paramref name="index"/> is NULL in the current row.</summary>
     public bool IsDBNull(int index)
     {
-        EnsureCurrent();
+        EnsureCurrent(index);
         return NativeMethods.stoolap_rows_column_is_null(_handle.DangerousGetHandle(), index) != 0;
     }
 
     public long GetInt64(int index)
     {
-        EnsureCurrent();
+        EnsureCurrent(index);
         return NativeMethods.stoolap_rows_column_int64(_handle.DangerousGetHandle(), index);
     }
 
@@ -117,7 +122,7 @@ public sealed class Rows : IDisposable
 
     public double GetDouble(int index)
     {
-        EnsureCurrent();
+        EnsureCurrent(index);
         return NativeMethods.stoolap_rows_column_double(_handle.DangerousGetHandle(), index);
     }
 
@@ -125,13 +130,13 @@ public sealed class Rows : IDisposable
 
     public bool GetBoolean(int index)
     {
-        EnsureCurrent();
+        EnsureCurrent(index);
         return NativeMethods.stoolap_rows_column_bool(_handle.DangerousGetHandle(), index) != 0;
     }
 
     public string? GetString(int index)
     {
-        EnsureCurrent();
+        EnsureCurrent(index);
         var ptr = NativeMethods.stoolap_rows_column_text(_handle.DangerousGetHandle(), index, out var len);
         if (ptr == 0)
         {
@@ -145,7 +150,7 @@ public sealed class Rows : IDisposable
 
     public DateTime GetDateTime(int index)
     {
-        EnsureCurrent();
+        EnsureCurrent(index);
         long nanos = NativeMethods.stoolap_rows_column_timestamp(_handle.DangerousGetHandle(), index);
         return DateTime.UnixEpoch.AddTicks(nanos / 100L);
     }
@@ -156,7 +161,7 @@ public sealed class Rows : IDisposable
     /// </summary>
     public float[] GetVector(int index)
     {
-        EnsureCurrent();
+        EnsureCurrent(index);
         var ptr = NativeMethods.stoolap_rows_column_blob(_handle.DangerousGetHandle(), index, out var len);
         if (ptr == 0 || len == 0)
         {
@@ -174,10 +179,8 @@ public sealed class Rows : IDisposable
     /// <summary>Boxes the column value into a managed object.</summary>
     public object? GetValue(int index)
     {
-        if (IsDBNull(index))
-        {
-            return null;
-        }
+        // stoolap_rows_column_type reports NULL for a NULL value, so one type
+        // call replaces the separate IsDBNull crossing.
         return GetFieldType(index) switch
         {
             StoolapType.Null => null,
@@ -202,12 +205,18 @@ public sealed class Rows : IDisposable
         _handle.Dispose();
     }
 
-    private void EnsureCurrent()
+    private void EnsureCurrent(int index)
     {
         ThrowIfDisposed();
         if (!_hasCurrent)
         {
             throw new InvalidOperationException("No current row. Call Read() first.");
+        }
+        // The native getters answer an out-of-range index with NULL / 0.
+        if ((uint)index >= (uint)ColumnCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(index), index, $"The result has {ColumnCount} column(s).");
         }
     }
 

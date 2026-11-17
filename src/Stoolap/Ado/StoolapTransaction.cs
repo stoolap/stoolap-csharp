@@ -31,15 +31,37 @@ public sealed class StoolapTransaction : DbTransaction
 
     public override IsolationLevel IsolationLevel => _isolation;
 
-    public override void Commit() => Inner.Commit();
+    public override void Commit()
+    {
+        try
+        {
+            Inner.Commit();
+        }
+        finally
+        {
+            // The native handle is consumed whether or not the commit succeeds.
+            _connection.OnTransactionEnded(this);
+        }
+    }
 
-    public override void Rollback() => Inner.Rollback();
+    public override void Rollback()
+    {
+        try
+        {
+            Inner.Rollback();
+        }
+        finally
+        {
+            _connection.OnTransactionEnded(this);
+        }
+    }
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             Inner.Dispose();
+            _connection.OnTransactionEnded(this);
         }
         base.Dispose(disposing);
     }

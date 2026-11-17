@@ -21,11 +21,30 @@ internal sealed class StoolapTxHandle : SafeHandle
 {
     public StoolapTxHandle() : base(invalidHandleValue: 0, ownsHandle: true) { }
 
+    // The connection handle this transaction's one-call queries run on.
+    // Held with a SafeHandle reference so the native db is not closed while
+    // the transaction is open, and released however the transaction ends:
+    // commit, rollback, Dispose, or the finalizer of a leaked transaction.
+    private StoolapDbHandle? _db;
+
     public override bool IsInvalid => handle == 0;
+
+    public void HoldDatabase(StoolapDbHandle db)
+    {
+        bool added = false;
+        db.DangerousAddRef(ref added);
+        if (added)
+        {
+            _db = db;
+        }
+    }
+
+    public void ReleaseDatabase() => Interlocked.Exchange(ref _db, null)?.DangerousRelease();
 
     protected override bool ReleaseHandle()
     {
         NativeMethods.stoolap_tx_rollback(handle);
+        ReleaseDatabase();
         return true;
     }
 

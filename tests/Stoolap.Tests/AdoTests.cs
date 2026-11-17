@@ -17,7 +17,7 @@ public class AdoTests
     [Fact]
     public void Connection_Open_AndExecute()
     {
-        using var conn = new StoolapConnection("Data Source=memory://");
+        using var conn = new StoolapConnection($"Data Source=memory://ado-{Guid.NewGuid():N}");
         conn.Open();
         Assert.Equal(ConnectionState.Open, conn.State);
 
@@ -60,7 +60,7 @@ public class AdoTests
     [Fact]
     public void DataReader_Read_StreamsRows()
     {
-        using var conn = new StoolapConnection();
+        using var conn = new StoolapConnection($"Data Source=memory://ado-{Guid.NewGuid():N}");
         conn.Open();
 
         using (var cmd = conn.CreateCommand())
@@ -95,7 +95,7 @@ public class AdoTests
     [Fact]
     public void Transaction_RollbackOnDispose()
     {
-        using var conn = new StoolapConnection();
+        using var conn = new StoolapConnection($"Data Source=memory://ado-{Guid.NewGuid():N}");
         conn.Open();
         using (var cmd = conn.CreateCommand())
         {

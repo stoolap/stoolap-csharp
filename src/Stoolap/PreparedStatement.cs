@@ -19,6 +19,7 @@ namespace Stoolap;
 public sealed class PreparedStatement : IDisposable
 {
     private readonly StoolapStmtHandle _handle;
+    private readonly ColumnHeaderCache _columns = new();
     private bool _disposed;
 
     internal PreparedStatement(StoolapStmtHandle handle)
@@ -76,12 +77,23 @@ public sealed class PreparedStatement : IDisposable
 
     public QueryResult Query(params object?[] parameters)
     {
-        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(parameters);
+        return QueryAll(0, parameters);
+    }
+
+    /// <summary>
+    /// Runs the statement through <c>stoolap_stmt_query_all</c>, inside
+    /// <paramref name="tx"/> when it is not 0. One P/Invoke call, no rows
+    /// handle; the packed buffer belongs to the statement and is decoded
+    /// before returning.
+    /// </summary>
+    [SkipLocalsInit]
+    internal QueryResult QueryAll(nint tx, ReadOnlySpan<object?> parameters)
+    {
+        ThrowIfDisposed();
         var binder = default(ParameterBinder);
         try
         {
-            nint rawRows;
             unsafe
             {
                 Span<StoolapValue> values = parameters.Length <= 16
@@ -91,15 +103,17 @@ public sealed class PreparedStatement : IDisposable
                 fixed (StoolapValue* ptr = values)
                 {
                     binder.Bind(parameters, ptr, scratch, ParameterBinder.RecommendedScratchSize);
-                    int rc = NativeMethods.stoolap_stmt_query(
-                        _handle.DangerousGetHandle(), ptr, parameters.Length, out rawRows);
-                    if (rc != StatusCodes.Ok || rawRows == 0)
+                    var stmt = _handle.DangerousGetHandle();
+                    int rc = NativeMethods.stoolap_stmt_query_all(
+                        stmt, tx, ptr, parameters.Length, out var buf, out var len);
+                    if (rc != StatusCodes.Ok || buf == 0)
                     {
-                        throw StoolapException.FromStmt(_handle.DangerousGetHandle());
+                        throw StoolapException.FromStmt(stmt);
                     }
+                    return BinaryRowParser.Parse(
+                        new ReadOnlySpan<byte>((void*)buf, checked((int)len)), _columns);
                 }
             }
-            return Database_FetchAllAndClose(rawRows);
         }
         finally
         {
@@ -143,7 +157,16 @@ public sealed class PreparedStatement : IDisposable
         }
     }
 
-    internal nint DangerousHandle => _handle.DangerousGetHandle();
+    /// <summary>The native handle; throws once the statement is disposed, so a
+    /// freed pointer never reaches the engine.</summary>
+    internal nint DangerousHandle
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _handle.DangerousGetHandle();
+        }
+    }
 
     public void Dispose()
     {
@@ -160,33 +183,6 @@ public sealed class PreparedStatement : IDisposable
         if (_disposed)
         {
             throw new ObjectDisposedException(nameof(PreparedStatement));
-        }
-    }
-
-    // Mirrors Database.FetchAllAndClose; duplicated locally to keep it private.
-    private static QueryResult Database_FetchAllAndClose(nint rawRows)
-    {
-        int rc = NativeMethods.stoolap_rows_fetch_all(rawRows, out var buf, out var len);
-        try
-        {
-            if (rc != StatusCodes.Ok || buf == 0)
-            {
-                throw StoolapException.FromRows(rawRows);
-            }
-            unsafe
-            {
-                var span = new ReadOnlySpan<byte>((void*)buf, checked((int)len));
-                var decoded = BinaryRowParser.Parse(span);
-                return new QueryResult(decoded.Columns, decoded.Rows);
-            }
-        }
-        finally
-        {
-            if (buf != 0)
-            {
-                NativeMethods.stoolap_buffer_free(buf, len);
-            }
-            NativeMethods.stoolap_rows_close(rawRows);
         }
     }
 }
