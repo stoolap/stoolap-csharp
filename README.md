@@ -99,7 +99,7 @@ Supported RIDs: `osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`, `win-x64`.
 
 ```bash
 # 1) Build the native binary for the host platform.
-#    Auto-clones stoolap at $STOOLAP_ENGINE_REF (default v0.5.0)
+#    Auto-clones stoolap at $STOOLAP_ENGINE_REF (default v0.5.1)
 #    if no source is found locally.
 ./build/build-native.sh
 
